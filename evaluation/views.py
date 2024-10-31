@@ -51,7 +51,7 @@ def perf_stat_analyze():
                 second_event = match.group(3)
                 if (second_event == "time" or second_event == "user" 
                     or second_event == "sys" or second_event == "task-clock"):
-                    results[second_event] = float(count)
+                    results[second_event] = round(float(count),2)
                 else :
                     results[event] = count
     results['cache_misses_rate'] = round(int(results['cache_misses']) / int(results['cache_references']) * 100, 2)
@@ -80,14 +80,13 @@ def mem_samples():
         lines = f.readlines()
     
     total_lines = len(lines)
-    sample_points = []
+    sample_points = [0,]
     
     for index, line in enumerate(lines):
         # 计算采样点位置
         if index % (total_lines // 10) == 0:
             sample_points.append(int(line.strip()))
 
-    # max_value以kb为单位
     return sample_points
 
 def runningdata(request):
