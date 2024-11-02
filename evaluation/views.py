@@ -89,6 +89,23 @@ def mem_samples():
 
     return sample_points
 
+def get_total_traffic():
+    try:
+        # 打开文件并读取所有行
+        with open("net_flow.txt", "r") as file:
+            lines = file.readlines()
+
+        if not lines:
+            return "No data available"
+
+        # 获取最后一行并提取最后一个值
+        last_line = lines[-1].strip()  # 移除行尾的换行符和空白
+        total_traffic = last_line.split()[-1]  # 获取最后一个数据项
+
+        return total_traffic
+    except FileNotFoundError:
+        return "File not found"
+
 def runningdata(request):
     ret_dict = {}
 
@@ -107,6 +124,8 @@ def runningdata(request):
     else:
         ret_dict["max_memory_uesd"] = str(max_rss_memory) + "kB"
 
+    ret_dict["total_traffic"] = get_total_traffic() + "KB"
+    
     return JsonResponse(ret_dict)
 
 def get_mem_samples(request):
