@@ -58,6 +58,7 @@ def perf_stat_analyze():
     results['branch_misses_rate'] = round(int(results['branch_misses']) / int(results['branches']) * 100, 2)
     results['inst_per_cycle'] = round(int(results['instructions']) / int(results['cycles']), 2)
     results['cpu_util'] = round((float((results['user']))+float(results['sys'])) / float(results['time']) * 100, 1)
+    
     return results
 
 # 根据物理内存采样数据，获得最大内存使用，并绘制内存使用情况图
@@ -106,6 +107,67 @@ def get_total_traffic():
     except FileNotFoundError:
         return "File not found"
 
+def extract_gpu_kernel_summary():
+    # 结果数组，用于存储处理后的数据
+    results = {}
+
+    with open("nsys_data_output.txt", 'r', encoding='utf-8') as file:
+        lines = file.readlines()
+
+    capture = False
+
+    for line in lines:
+        # 当遇到 "CUDA GPU Kernel Summary" 时开始捕获数据
+        if "CUDA GPU Kernel Summary" in line:
+            capture = True
+            continue
+
+        # 当遇到 "CUDA GPU MemOps Summary" 时停止捕获数据
+        if capture and "CUDA GPU MemOps Summary" in line:
+            break
+
+        # 忽略空行或者没有有效数据的行
+        if capture and line.strip() == "":
+            continue
+
+        # 提取占用百分比和函数名
+        if capture:
+            # 匹配并提取占用百分比（行首浮动数字）
+            percentage_match = re.match(r"\s*(\d+\.\d+)\s+.*", line)
+            if percentage_match:
+                occupancy_percentage = float(percentage_match.group(1))
+
+                # 分割字符串，提取第二个 "::" 后的内容
+                parts = line.split("::", 2)
+                if len(parts) >= 3:
+                    # 如果第二个部分以 "<" 开头，检查长度后决定是否使用 parts[3]
+                    if parts[2].strip().startswith('<'):
+                        temp = parts[2].split("::", 1)
+                        function_name = temp[1]
+                    else:
+                        function_name = parts[2].strip()  # 获取第二个 "::" 后的部分
+                else:
+                    function_name = line.strip().split()[-1]  # 如果没有第二个 "::"，取最后一个词
+                # 将提取的函数名和占用百分比添加到结果中
+                results[function_name] = occupancy_percentage
+
+    sorted_functions = sorted(results.items(), key=lambda item: item[1], reverse=True)
+    result = [(func, round(percentage, 2)) for func, percentage in sorted_functions]
+    # 返回的结果是包含多个字典的数组，每个字典表示一个函数和它的占用百分比
+    return result
+
+def read_main_cycles():
+    try:
+        # 打开文件并读取代码
+        with open("code_cycles_count.txt", "r") as file:
+            code = file.read()
+        
+        return code
+
+    except FileNotFoundError:
+        return "File not found"
+
+
 def runningdata(request):
     ret_dict = {}
 
@@ -114,6 +176,9 @@ def runningdata(request):
 
     # 函数时间排行
     ret_dict["functionTime"] = func_time()
+
+    #GPU内核函数耗时排行
+    ret_dict["GPU_kernel_time"] = extract_gpu_kernel_summary()
 
     # 最大内存使用和内存使用情况采样
     max_rss_memory = rss_mem_used()
@@ -125,6 +190,8 @@ def runningdata(request):
         ret_dict["max_memory_uesd"] = str(max_rss_memory) + "kB"
 
     ret_dict["total_traffic"] = get_total_traffic() + "KB"
+
+    ret_dict["main_code_count"] = read_main_cycles()
     
     return JsonResponse(ret_dict)
 
@@ -132,4 +199,73 @@ def get_mem_samples(request):
     ret_dict = {}
     mem_samples_points = mem_samples()
     ret_dict["mem_samples"] = mem_samples_points
+    return JsonResponse(ret_dict)
+
+def get_active_pages(request):
+    ret_dict = {}
+    # 从文件读取数据
+    with open("get_active_page_data.txt", "r") as file:
+        data = file.read()
+
+# 使用正则表达式提取数据并累加
+    pattern = r"Filename:(\S+)\s+Range:\s([0-9a-fA-F]+-[0-9a-fA-F]+)\s+Memory Size:\s([\d.]+)\s+MB\s+Active Pages:\s(\d+)"
+    memory_data = defaultdict(lambda: defaultdict(lambda: {"Memory Size": 0, "Active Pages": 0}))
+
+    for match in re.finditer(pattern, data):
+        filename = match.group(1)
+        range_key = match.group(2)
+        memory_size = float(match.group(3))
+        active_pages = int(match.group(4))
+
+    # 只记录第一次提取到的Memory Size，并累加Active Pages
+        if memory_data[filename][range_key]["Memory Size"] == 0:
+            memory_data[filename][range_key]["Memory Size"] = memory_size
+        memory_data[filename][range_key]["Active Pages"] += active_pages
+
+# 汇总所有的内存数据
+    all_data = []
+    for filename, ranges in memory_data.items():
+    # 排除 [anno] 文件名
+        if filename != "[anno]":
+            # 对每个文件名，只保留 Active Pages 最大的一个范围
+            max_active_pages_info = None
+            for range_key, info in ranges.items():
+                if max_active_pages_info is None or info["Active Pages"] > max_active_pages_info["Active Pages"]:
+                    max_active_pages_info = info
+            if max_active_pages_info:
+                all_data.append({
+                    "Filename": filename,
+                    "Range": range_key,
+                    "Memory Size": max_active_pages_info["Memory Size"],
+                    "Active Pages": max_active_pages_info["Active Pages"]
+                })
+
+# 找到最大的 Active Pages 值
+    max_active_pages = max(item["Active Pages"] for item in all_data) if all_data else 1
+
+# 按Active Pages数量排序
+    sorted_data = sorted(all_data, key=lambda x: x["Active Pages"], reverse=True)
+
+# 取前10条数据
+    top_10_data = sorted_data[:10]
+
+# 创建两个空数组，分别存储 Filename 和 Normalized Active Pages
+    File_Name = []  # 存储 Filename
+    active_pages_Nor = []   # 存储 Normalized Active Pages
+
+# 填充数组
+    for i, info in enumerate(top_10_data):
+        # 截取 '.so' 后面的版本号
+        filename = info['Filename']
+        filename = re.sub(r'\.so(\.\d+(\.\d+)*)$', '.so', filename)  # 使用正则表达式替换版本号部分
+
+        normalized_active_pages = round(info["Active Pages"] / max_active_pages, 2)
+        File_Name.append(filename)
+        active_pages_Nor.append([i,0,normalized_active_pages])
+
+
+    ret_dict["file_name"] = File_Name
+    ret_dict["active_pages_Nor"] = active_pages_Nor
+    # 输出结果（可选）
+    print("other_points:", active_pages_Nor)
     return JsonResponse(ret_dict)

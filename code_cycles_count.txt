@@ -1,0 +1,35 @@
+
+	int main() {
+	int **matrix = (int **)malloc(ROWS * sizeof(int *));
+	for (int i = 0; i < ROWS; i++) {
+	matrix[i] = (int *)malloc(COLS * sizeof(int));
+0.001	for (int j = 0; j < COLS; j++) {
+0.002	matrix[i][j] = rand() % 100;
+	}
+	}
+	int sum = 0;
+	clock_t start = clock();
+	for (int iter = 0; iter < ITERATIONS; iter++) {
+	for (int j = 0; j + 16 < COLS; j+=16) {
+	//__asm__ volatile("prfm pldl2strm, [%0]" :: "r"(&matrix[0][j]));
+	//__asm__ volatile("prfm pldl2strm, [%0]" :: "r"(&matrix[1][j]));
+	//__asm__ volatile("prfm pldl2strm, [%0]" :: "r"(&matrix[2][j]));
+	//__asm__ volatile("prfm pldl2strm, [%0]" :: "r"(&matrix[3][j]));
+	//__asm__ volatile("prfm pldl2strm, [%0]" :: "r"(&matrix[4][j]));
+0.001	for (int i = 0; i < ROWS; i++) {
+	//if(i + 2 < ROWS)
+	//__asm__ volatile("prfm pldl2strm, [%0]" :: "r"(&matrix[i+2][j]));
+0.040	for(int t = j; t < j + 16; t++)
+0.954	sum += matrix[i][t];
+	}
+	}
+	}
+	clock_t end = clock();
+	printf("Sum: %d\n", sum);
+	printf("Time taken: %lf seconds\n", (double)(end - start) / CLOCKS_PER_SEC);
+	for (int i = 0; i < ROWS; i++) {
+	free(matrix[i]);
+	}
+	free(matrix);
+	return 0;
+	}

@@ -7,4 +7,5 @@ urlpatterns = [
     # path("cycles/", views.cycles, name="cycles"),
     path("runningdata/", views.runningdata, name="runningdata"),
     path("memsamples/", views.get_mem_samples, name="memsamples"),
+    path("activepages/", views.get_active_pages, name="activepages"),
 ]

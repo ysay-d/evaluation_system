@@ -7,14 +7,14 @@
          537974885      cache-misses                     #    3.84% of all cache refs         
         1501029995      branches                         #   42.193 M/sec                     
              74097      branch-misses                    #    0.00% of all branches           
-       27504605891      instructions                     #    0.33  insn per cycle            
-       83086398141      cycles                           #    2.336 GHz                       
-          35574.95 msec task-clock                       #    0.877 CPUs utilized             
-            130038      page-faults                      #    3.655 K/sec                     
+
 
       40.579592504 seconds time elapsed
 
       34.687141000 seconds user
        0.887978000 seconds sys
 
-
+       27504605891      instructions                     #    0.33  insn per cycle            
+       83086398141      cycles                           #    2.336 GHz                       
+          35574.95 msec task-clock                       #    0.877 CPUs utilized             
+            130038      page-faults                      #    3.655 K/sec                     
