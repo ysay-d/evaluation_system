@@ -8,4 +8,6 @@ urlpatterns = [
     path("runningdata/", views.runningdata, name="runningdata"),
     path("memsamples/", views.get_mem_samples, name="memsamples"),
     path("activepages/", views.get_active_pages, name="activepages"),
+    path('functionDetails/<str:function_name>/', views.function_details, name='function_details'),
+    path("file_upload/", views.file_upload, name="file_upload"),
 ]

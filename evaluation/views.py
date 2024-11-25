@@ -1,16 +1,19 @@
 from django.shortcuts import render
 from collections import defaultdict
 from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
 
 # Create your views here.
 from django.http import HttpResponse
 import re
+import json
+import os
 
 def index(request):
     return HttpResponse("Hello, world. You're at the evalution index.")
 
 # 获取函数耗时排行数据
-def func_time():
+def func_time(data):
     # (函数名+偏移量：采样数)的字典
     # 此处的函数名是“函数名+偏移量”的形式，如main+0x164
     function_offset_names = defaultdict(int)
@@ -18,8 +21,9 @@ def func_time():
     # 获取perf script文件的每一行的函数名(下标为-2的子串),递增计数
     # 此处的函数名是“函数名+偏移量”的形式，如main+0x164
     # TODO:使用偏移量分析某行汇编代码的使用
-    with open("perf_script.txt","r") as f:
-        for line in f:
+    file_name = "perf_script.txt"
+    if file_name in data:
+        for line in data[file_name]:
             function_offset_names[line.split()[-2]] += 1
     
     function_names = defaultdict(int)
@@ -39,10 +43,13 @@ def func_time():
     return sorted_function
 
 # 根据perf stat文件，获取各项指标
-def perf_stat_analyze():
+def perf_stat_analyze(data):
     results = {}
-    with open("perf_stat.txt", "r") as f:
-        for line in f:
+    #with open("perf_stat.txt", "r") as f:
+    file_name = "perf_stat.txt"
+    if file_name in data:
+        for line in data[file_name]:
+        #for line in f:
             # 匹配事件统计数据的行
             match = re.match(r'^\s*([\d,.]+)\s+(\S+)\s(\S*)', line)
             if match:
@@ -62,9 +69,9 @@ def perf_stat_analyze():
     return results
 
 # 根据物理内存采样数据，获得最大内存使用，并绘制内存使用情况图
-def rss_mem_used():
-    with open("mem_sample.txt", "r") as f:
-        lines = f.readlines()
+def rss_mem_used(data):
+    if "mem_sample.txt" in data:
+        lines = data["mem_sample.txt"]
 
     max_value = 0
     
@@ -77,8 +84,13 @@ def rss_mem_used():
     return max_value
 
 def mem_samples():
-    with open("mem_sample.txt", "r") as f:
-        lines = f.readlines()
+# 从 JSON 文件中读取数据
+    with open("combined_data.json", "r") as json_file:
+        data = json.load(json_file)
+
+    # 获取 mem_sample.txt 对应的数据
+    if "mem_sample.txt" in data:
+        lines = data["mem_sample.txt"]
     
     total_lines = len(lines)
     sample_points = [0,]
@@ -90,29 +102,25 @@ def mem_samples():
 
     return sample_points
 
-def get_total_traffic():
-    try:
+def get_total_traffic(data):
         # 打开文件并读取所有行
-        with open("net_flow.txt", "r") as file:
-            lines = file.readlines()
+    if "net_flow.txt" in data:
+        lines = data["net_flow.txt"]
 
-        if not lines:
-            return "No data available"
+    if not lines:
+        return "No data available"
 
-        # 获取最后一行并提取最后一个值
-        last_line = lines[-1].strip()  # 移除行尾的换行符和空白
-        total_traffic = last_line.split()[-1]  # 获取最后一个数据项
+    # 获取最后一行并提取最后一个值
+    last_line = lines[-1].strip()  # 移除行尾的换行符和空白
+    total_traffic = last_line.split()[-1]  # 获取最后一个数据项
 
-        return total_traffic
-    except FileNotFoundError:
-        return "File not found"
+    return total_traffic
 
-def extract_gpu_kernel_summary():
+def extract_gpu_kernel_summary(data):
     # 结果数组，用于存储处理后的数据
     results = {}
-
-    with open("nsys_data_output.txt", 'r', encoding='utf-8') as file:
-        lines = file.readlines()
+    if "nsys_data_output.txt" in data:
+        lines = data["nsys_data_output.txt"]
 
     capture = False
 
@@ -167,21 +175,25 @@ def read_main_cycles():
     except FileNotFoundError:
         return "File not found"
 
+def load_json(file_path):
+    with open(file_path, 'r') as json_file:
+        return json.load(json_file)
 
 def runningdata(request):
     ret_dict = {}
+    data = load_json("combined_data.json")
 
-    perf_stat_data = perf_stat_analyze()
+    perf_stat_data = perf_stat_analyze(data)
     ret_dict["perfStat"] = perf_stat_data
 
     # 函数时间排行
-    ret_dict["functionTime"] = func_time()
+    ret_dict["functionTime"] = func_time(data)
 
     #GPU内核函数耗时排行
-    ret_dict["GPU_kernel_time"] = extract_gpu_kernel_summary()
+    ret_dict["GPU_kernel_time"] = extract_gpu_kernel_summary(data)
 
     # 最大内存使用和内存使用情况采样
-    max_rss_memory = rss_mem_used()
+    max_rss_memory = rss_mem_used(data)
     if int(max_rss_memory > (1024 *1024)):
         ret_dict["max_memory_uesd"] = str(round(max_rss_memory / (1024 * 1024), 2)) + "GB"
     elif int(max_rss_memory > 1024):
@@ -189,7 +201,7 @@ def runningdata(request):
     else:
         ret_dict["max_memory_uesd"] = str(max_rss_memory) + "kB"
 
-    ret_dict["total_traffic"] = get_total_traffic() + "KB"
+    ret_dict["total_traffic"] = get_total_traffic(data) + "KB"
 
     ret_dict["main_code_count"] = read_main_cycles()
     
@@ -204,10 +216,14 @@ def get_mem_samples(request):
 def get_active_pages(request):
     ret_dict = {}
     # 从文件读取数据
-    with open("get_active_page_data.txt", "r") as file:
-        data = file.read()
+    with open("combined_data.json", "r") as json_file:
+        json_data = json.load(json_file)
+    
+    data = json_data.get("get_active_page_data.txt", "")
+    if isinstance(data, list):
+        data = "".join(data) 
 
-# 使用正则表达式提取数据并累加
+    # 使用正则表达式提取数据并累加
     pattern = r"Filename:(\S+)\s+Range:\s([0-9a-fA-F]+-[0-9a-fA-F]+)\s+Memory Size:\s([\d.]+)\s+MB\s+Active Pages:\s(\d+)"
     memory_data = defaultdict(lambda: defaultdict(lambda: {"Memory Size": 0, "Active Pages": 0}))
 
@@ -222,7 +238,7 @@ def get_active_pages(request):
             memory_data[filename][range_key]["Memory Size"] = memory_size
         memory_data[filename][range_key]["Active Pages"] += active_pages
 
-# 汇总所有的内存数据
+    # 汇总所有的内存数据
     all_data = []
     for filename, ranges in memory_data.items():
     # 排除 [anno] 文件名
@@ -240,26 +256,26 @@ def get_active_pages(request):
                     "Active Pages": max_active_pages_info["Active Pages"]
                 })
 
-# 找到最大的 Active Pages 值
-    max_active_pages = max(item["Active Pages"] for item in all_data) if all_data else 1
-
-# 按Active Pages数量排序
+    # 按Active Pages数量排序
     sorted_data = sorted(all_data, key=lambda x: x["Active Pages"], reverse=True)
 
-# 取前10条数据
+    # 取前10条数据
     top_10_data = sorted_data[:10]
 
-# 创建两个空数组，分别存储 Filename 和 Normalized Active Pages
+    # 累加前10条数据的Active Pages总大小
+    total_active_pages = sum(item["Active Pages"] for item in top_10_data) if top_10_data else 1
+
+    # 创建两个空数组，分别存储 Filename 和 Normalized Active Pages
     File_Name = []  # 存储 Filename
     active_pages_Nor = []   # 存储 Normalized Active Pages
 
-# 填充数组
+    # 填充数组
     for i, info in enumerate(top_10_data):
         # 截取 '.so' 后面的版本号
         filename = info['Filename']
         filename = re.sub(r'\.so(\.\d+(\.\d+)*)$', '.so', filename)  # 使用正则表达式替换版本号部分
 
-        normalized_active_pages = round(info["Active Pages"] / max_active_pages, 2)
+        normalized_active_pages = round(info["Active Pages"] / total_active_pages, 2)
         File_Name.append(filename)
         active_pages_Nor.append([i,0,normalized_active_pages])
 
@@ -269,3 +285,40 @@ def get_active_pages(request):
     # 输出结果（可选）
     print("other_points:", active_pages_Nor)
     return JsonResponse(ret_dict)
+
+def function_details(request, function_name):
+    print(function_name)
+    with open("combined_data.json", 'r') as json_file:
+        data = json.load(json_file)
+    
+    tmp_name = f"{function_name}_cycles_count.txt"
+    if tmp_name in data:
+        code = ''.join(([line for line in data[tmp_name]]))
+        
+        return JsonResponse({
+        'code': code,  
+    })
+
+@csrf_exempt
+def file_upload(request):
+    if request.method == 'POST':
+        print(os.getcwd())
+        try:
+            # 检查是否提供了文件
+            json_file = request.FILES.get('file')
+            if not json_file:
+                return JsonResponse({'error': 'No file uploaded'}, status=400)
+            
+            # 将文件内容保存到combined_data.json
+            save_path = os.path.join(os.getcwd(), 'combined_data.json')  # 当前文件夹路径
+            with open(save_path, 'w', encoding='utf-8') as destination:
+                for chunk in json_file.chunks():
+                    destination.write(chunk.decode('utf-8'))  # 解码为字符串并写入
+            
+            file_url = f"/{os.path.basename(save_path)}"
+            return JsonResponse({'message': 'File saved successfully', 'url': request.build_absolute_uri(file_url)})
+        
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
+
+    return JsonResponse({'error': 'Invalid request method'}, status=405)
