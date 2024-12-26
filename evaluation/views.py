@@ -7,7 +7,8 @@ from django.http import HttpResponse
 import re
 
 def index(request):
-    return HttpResponse("Hello, world. You're at the evalution index.")
+    return render(request, 'index.html', {})
+    # return HttpResponse("Hello, world. You're at the evalution index.")
 
 # 获取函数耗时排行数据
 def func_time():
