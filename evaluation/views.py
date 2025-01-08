@@ -8,6 +8,7 @@ from django.http import HttpResponse
 import re
 import json
 import os
+import subprocess
 
 def index(request):
     return HttpResponse("Hello, world. You're at the evalution index.")
@@ -106,6 +107,8 @@ def get_total_traffic(data):
         # 打开文件并读取所有行
     if "net_flow.txt" in data:
         lines = data["net_flow.txt"]
+    else:
+        return "0"
 
     if not lines:
         return "No data available"
@@ -121,6 +124,8 @@ def extract_gpu_kernel_summary(data):
     results = {}
     if "nsys_data_output.txt" in data:
         lines = data["nsys_data_output.txt"]
+    else:
+        return "File not found"
 
     capture = False
 
@@ -297,6 +302,37 @@ def function_details(request, function_name):
         
         return JsonResponse({
         'code': code,  
+    })
+
+def data_record(request, file_path):
+    file_path = file_path.replace('_', '/')
+    data_record_path = os.path.abspath("./DataRecord/data_record.py")
+    print(file_path)
+
+    if not os.path.exists(file_path):
+        return JsonResponse({
+            'status': "error",
+            'message': "File does not exist",
+        }, status=400)
+    else:
+        print("the file exists")
+
+        # 构造命令
+    command = ["sudo", "python3", data_record_path, file_path]
+
+    try:
+        # 执行命令
+        subprocess.run(command, check=True)
+        print(f"Successfully executed {data_record_path} with argument {file_path}.")
+    except subprocess.CalledProcessError as e:
+        print(f"Error occurred while executing {data_record_path}: {e}")
+        return JsonResponse({
+            'status': "error",
+            'message': "File does not exist",
+        }, status=400)
+
+    return JsonResponse({
+        'status': "success",  
     })
 
 @csrf_exempt
