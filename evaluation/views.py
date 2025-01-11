@@ -16,12 +16,9 @@ def index(request):
 # 获取函数耗时排行数据
 def func_time(data):
     # (函数名+偏移量：采样数)的字典
-    # 此处的函数名是“函数名+偏移量”的形式，如main+0x164
     function_offset_names = defaultdict(int)
     
     # 获取perf script文件的每一行的函数名(下标为-2的子串),递增计数
-    # 此处的函数名是“函数名+偏移量”的形式，如main+0x164
-    # TODO:使用偏移量分析某行汇编代码的使用
     file_name = "perf_script.txt"
     if file_name in data:
         for line in data[file_name]:
@@ -29,15 +26,13 @@ def func_time(data):
     
     function_names = defaultdict(int)
 
-    # 统计函数名，记录在(函数名：采样数)字典中
     # 记录全部样本数量，之后将采样数转为百分比
     sample_sum = 0
     for key, value in function_offset_names.items():
         function_names[key.split('+')[0]] += value
         sample_sum += value
         
-    # 将结果从大到小排序
-    # 计算每个值占总和的百分比
+    # 将结果从大到小排序,计算每个值占总和的百分比
     percentages = {key: round((value / sample_sum) * 100, 2) for key, value in function_names.items()}
     sorted_function = sorted(percentages.items(), key=lambda item: item[1], reverse=True)
 
@@ -111,7 +106,7 @@ def get_total_traffic(data):
         return "0"
 
     if not lines:
-        return "No data available"
+        return "0"
 
     # 获取最后一行并提取最后一个值
     last_line = lines[-1].strip()  # 移除行尾的换行符和空白
@@ -209,7 +204,28 @@ def runningdata(request):
     ret_dict["total_traffic"] = get_total_traffic(data) + "KB"
 
     ret_dict["main_code_count"] = read_main_cycles()
+
+    if "load_data.txt" in data:
+        lines = data["load_data.txt"]
+        ret_dict['IO_time'] = str(lines[0].strip()) + "ms"
     
+    return JsonResponse(ret_dict)
+
+def loadingdata(request):
+    ret_dict = {}
+    data = load_json("combined_data.json")
+
+    if "load_data.txt" in data:
+        lines = data["load_data.txt"]
+    
+        if len(lines) >= 2:
+            try:
+                ret_dict['IO_time'] = float(lines[0].strip())
+                ret_dict['execvetime'] = int(lines[1].strip()) / 1000
+                
+            except (IndexError, ValueError) as e:
+                print(f"Error processing lines: {e}")
+
     return JsonResponse(ret_dict)
 
 def get_mem_samples(request):
@@ -220,7 +236,6 @@ def get_mem_samples(request):
 
 def get_active_pages(request):
     ret_dict = {}
-    # 从文件读取数据
     with open("combined_data.json", "r") as json_file:
         json_data = json.load(json_file)
     
@@ -287,8 +302,6 @@ def get_active_pages(request):
 
     ret_dict["file_name"] = File_Name
     ret_dict["active_pages_Nor"] = active_pages_Nor
-    # 输出结果（可选）
-    print("other_points:", active_pages_Nor)
     return JsonResponse(ret_dict)
 
 def function_details(request, function_name):
