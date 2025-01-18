@@ -2,6 +2,7 @@ from django.shortcuts import render
 from collections import defaultdict
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_POST
 
 # Create your views here.
 from django.http import HttpResponse
@@ -13,35 +14,29 @@ import subprocess
 def index(request):
     return HttpResponse("Hello, world. You're at the evalution index.")
 
-# 获取函数耗时排行数据
 def func_time(data):
     # (函数名+偏移量：采样数)的字典
-    function_offset_names = defaultdict(int)
-    
-    # 获取perf script文件的每一行的函数名(下标为-2的子串),递增计数
-    file_name = "perf_script.txt"
+    sorted_function = []
+    file_name = "func_time.txt"
     if file_name in data:
         for line in data[file_name]:
-            function_offset_names[line.split()[-2]] += 1
-    
-    function_names = defaultdict(int)
-
-    # 记录全部样本数量，之后将采样数转为百分比
-    sample_sum = 0
-    for key, value in function_offset_names.items():
-        function_names[key.split('+')[0]] += value
-        sample_sum += value
+            line = line.strip()  # 去除行尾的换行符和多余空格
+            if '\t' in line:
+                func, percentage_str = line.split('\t')
+                try:
+                    percentage = float(percentage_str)
+                    sorted_function.append((func, percentage))
+                except ValueError:
+                    print(f"Warning: Could not convert '{percentage_str}' to float.")
         
-    # 将结果从大到小排序,计算每个值占总和的百分比
-    percentages = {key: round((value / sample_sum) * 100, 2) for key, value in function_names.items()}
-    sorted_function = sorted(percentages.items(), key=lambda item: item[1], reverse=True)
-
-    return sorted_function
+        return sorted_function
+    else:
+        print(f"File '{file_name}' not found in JSON data.")
+        return []
 
 # 根据perf stat文件，获取各项指标
 def perf_stat_analyze(data):
     results = {}
-    #with open("perf_stat.txt", "r") as f:
     file_name = "perf_stat.txt"
     if file_name in data:
         for line in data[file_name]:
@@ -76,30 +71,30 @@ def rss_mem_used(data):
         if value > max_value:
             max_value = value
 
-    # max_value以kb为单位
     return max_value
 
 def mem_samples():
-# 从 JSON 文件中读取数据
     with open("combined_data.json", "r") as json_file:
         data = json.load(json_file)
 
-    # 获取 mem_sample.txt 对应的数据
     if "mem_sample.txt" in data:
         lines = data["mem_sample.txt"]
     
     total_lines = len(lines)
-    sample_points = [0,]
+    sample_points = [0]
     
-    for index, line in enumerate(lines):
-        # 计算采样点位置
-        if index % (total_lines // 10) == 0:
-            sample_points.append(int(line.strip()))
+    if total_lines > 0:
+        if total_lines <= 9:
+            sample_points.extend(int(line.strip()) for line in lines)
+        else:
+            # 计算实际需要的间隔
+            interval = max(1, total_lines // 9)
+            sample_points.extend(int(lines[i].strip()) for i in range(0, total_lines, interval)[:9])
 
+    print(sample_points)
     return sample_points
 
 def get_total_traffic(data):
-        # 打开文件并读取所有行
     if "net_flow.txt" in data:
         lines = data["net_flow.txt"]
     else:
@@ -108,7 +103,6 @@ def get_total_traffic(data):
     if not lines:
         return "0"
 
-    # 获取最后一行并提取最后一个值
     last_line = lines[-1].strip()  # 移除行尾的换行符和空白
     total_traffic = last_line.split()[-1]  # 获取最后一个数据项
 
@@ -207,7 +201,19 @@ def runningdata(request):
 
     if "load_data.txt" in data:
         lines = data["load_data.txt"]
-        ret_dict['IO_time'] = str(lines[0].strip()) + "ms"
+        
+        try:
+            io_time_ms = float(lines[0].strip())  # 将字符串转换为浮点数
+            
+            if io_time_ms > 1000:
+                io_time_s = io_time_ms / 1000  # 转换为秒
+                ret_dict['IO_time'] = f"{io_time_s:.2f}s"  
+            else:
+                ret_dict['IO_time'] = f"{io_time_ms:.2f}ms" 
+
+        except (IndexError, ValueError) as e:
+            print(f"Error processing IO_time: {e}")
+            ret_dict['IO_time'] = "0"
     
     return JsonResponse(ret_dict)
 
@@ -317,6 +323,7 @@ def function_details(request, function_name):
         'code': code,  
     })
 
+'''
 def data_record(request, file_path):
     file_path = file_path.replace('_', '/')
     data_record_path = os.path.abspath("./DataRecord/data_record.py")
@@ -347,6 +354,59 @@ def data_record(request, file_path):
     return JsonResponse({
         'status': "success",  
     })
+'''
+
+@csrf_exempt
+@require_POST
+def data_record(request):
+    try:
+        # 尝试从请求体中解析JSON数据
+        body_unicode = request.body.decode('utf-8')
+        body_data = json.loads(body_unicode)
+        file_path = body_data.get('path', '')
+        program_args = body_data.get('args', '')
+
+        # 检查文件路径是否存在
+        if not os.path.exists(file_path):
+            return JsonResponse({
+                'status': "error",
+                'message': "File does not exist",
+            }, status=400)
+
+        print("the file exists")
+
+        # 获取绝对路径
+        data_record_path = os.path.abspath("./DataRecord/data_record.py")
+        
+        # 构造命令列表，注意要对参数进行拆分
+        command = ["sudo", "python3", data_record_path, file_path]
+        if program_args:
+            print("args: " + program_args)
+            command.extend(["-p", program_args])
+
+        # 执行命令
+        subprocess.run(command, check=True)
+        print(f"Successfully executed {data_record_path} with arguments: {' '.join(command[1:])}")
+
+        return JsonResponse({
+            'status': "success",
+        })
+
+    except json.JSONDecodeError:
+        return JsonResponse({
+            'status': "error",
+            'message': "Invalid JSON input",
+        }, status=400)
+    except subprocess.CalledProcessError as e:
+        return JsonResponse({
+            'status': "error",
+            'message': f"Error occurred while executing the command: {e}",
+        }, status=500)
+    except Exception as e:
+        return JsonResponse({
+            'status': "error",
+            'message': f"Unexpected error: {e}",
+        }, status=500)
 
 @csrf_exempt
 def file_upload(request):
@@ -358,7 +418,6 @@ def file_upload(request):
             if not json_file:
                 return JsonResponse({'error': 'No file uploaded'}, status=400)
             
-            # 将文件内容保存到combined_data.json
             save_path = os.path.join(os.getcwd(), 'combined_data.json')  # 当前文件夹路径
             with open(save_path, 'w', encoding='utf-8') as destination:
                 for chunk in json_file.chunks():

@@ -5,6 +5,7 @@ import os
 import json
 import re
 import signal
+import shlex
 from collections import defaultdict
 
 
@@ -25,55 +26,54 @@ def check_nsys_installed():
     except subprocess.CalledProcessError:
         return False
 
-def profile_program(program_path, interval):
-    perf_stat_events = "instructions,cycles,task-clock,page-faults"
-    perf_record_event = "cpu-cycles"
-    output_file = "perf_stat.txt"
-    perf_data_file_path = 'perf.data'
+def first_record(program_path, program_args=None):
+    executable_path = os.path.abspath(program_path)
+    program_name = os.path.basename(executable_path)
+
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    trace_path = os.path.join(current_dir, "trace.py")
+    execve_path = os.path.join(current_dir, "trace_iof.py")
+
+    trace_process = subprocess.Popen(['python3', trace_path, program_name, "--mem", "--monitor"])
+    execve_process = subprocess.Popen(['python3', execve_path, program_name])
+    print("------------ ready for first time recording, first stat, memory use, active pages, I\O time and net flow --------------")
+    while not os.path.exists("tmp_start.txt"):
+        time.sleep(0.1)
 
     try:
-        program_process = subprocess.Popen(program_path.split())
-        print(f"Program started with PID: {program_process.pid}")
-        
-        time.sleep(1)
-
-        with open(output_file, 'w') as stat_output_file:
-            perf_stat_proc = subprocess.Popen(
-                ['perf', 'stat', '-e', perf_stat_events, '-p', str(program_process.pid)],
-                stdout=stat_output_file,
-                stderr=stat_output_file
-            )
-            print(f"perf stat attached to PID: {program_process.pid}")
-
-        with open(perf_data_file_path, 'w') as perf_data_file:
-            perf_record_proc = subprocess.Popen(
-                ['perf', 'record', '-e', perf_record_event, '-o', perf_data_file.name, '-p', str(program_process.pid)],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
-            print(f"perf record attached to PID: {program_process.pid}")
-
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        read_path = os.path.join(current_dir, "read")
-        read_command = [read_path, str(program_process.pid), str(interval)] 
-        subprocess.run(read_command, check=True)
-
-        program_process.wait()
+        perf_stat_command_1 = ["perf", "stat", "-e", "page-faults,branches,branch-misses,task-clock", executable_path]
+        if program_args:
+            perf_stat_command_1.extend(shlex.split(program_args))
+        with open("perf_stat.txt", "w") as output_file:  
+            subprocess.run(perf_stat_command_1, check=True, stdout=output_file, stderr=output_file)
 
     except Exception as e:
         print(f"An error occurred: {e}")
-    
-    finally:
-        for proc in [perf_stat_proc, perf_record_proc]:
-            if proc and proc.poll() is None:  
-                proc.send_signal(signal.SIGINT)
-                proc.wait()
 
-    perf_stat_command_1 = ["perf", "stat", "-e", "cache-references,cache-misses,branches,branch-misses,task-clock", program_path]
-    with open("perf_stat.txt", "a") as output_file:  
-        subprocess.run(perf_stat_command_1, check=True, stdout=output_file, stderr=output_file)
+def second_record(program_path, program_args=None):
+    executable_path = os.path.abspath(program_path)
+    program_name = os.path.basename(executable_path)
 
-    perf_script_command = ["perf", "script"]
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    trace_path = os.path.join(current_dir, "trace.py")
+    execve_path = os.path.join(current_dir, "time_execve.py")
+
+    trace_process = subprocess.Popen(['python3', trace_path, program_name, "--stat"])
+    execve_process = subprocess.Popen(['python3', execve_path, program_name])
+    print("------------ ready for second time recording, second stat, cpu-cycles and execve time----------------------------------")
+    while not os.path.exists("execve_start.txt"):
+        time.sleep(0.1)
+
+    try:
+        perf_record_command = ["perf", "record", "-e", "cpu-cycles", program_path]
+        if program_args:
+            perf_record_command.extend(shlex.split(program_args))
+        subprocess.run(perf_record_command, check=True)
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+    perf_script_command = ["sudo", "perf", "script"]
     with open("perf_script.txt", "w") as output_file:
         subprocess.run(perf_script_command, check=True, stdout=output_file)
 
@@ -123,10 +123,12 @@ def monitor_process(executable_path, interval):
     subprocess.run(read_command, check=True)
 
 def run_flow_pid_script(executable_path):
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    flow_path = os.path.join(current_dir, "flow_pid.py")
     process = subprocess.Popen([executable_path])
     pid = process.pid
     print(f"Started process with PID: {pid}")
-    flow_pid_command = ["python3", "flow_pid.py", "-pi", str(pid)]
+    flow_pid_command = ["python3", flow_path, "-p", str(pid)]
     print(f"Executing: {' '.join(flow_pid_command)}")
     subprocess.run(flow_pid_command, check=True)
 
@@ -156,6 +158,11 @@ def func_time():
         
     percentages = {key: round((value / sample_sum) * 100, 2) for key, value in function_names.items()}
     sorted_function = sorted(percentages.items(), key=lambda item: item[1], reverse=True)
+
+    with open("func_time.txt", "w") as output_file:
+        for func, percentage in sorted_function:
+            output_file.write(f"{func}\t{percentage}\n")
+
     return sorted_function
 
 def run_gdb_disassemble(executable, function_name="main"):
@@ -244,8 +251,6 @@ def process_source_code_and_assemble(input_file_1, function_name="main"):
                 out_f.write(f"{count * 100:.2f}%\t{source_code}\n")
             else:
                 out_f.write(f"\t{source_code}\n")
-    
-    print(f"Processing complete. Results are saved in {output_file}")
 
 def read_txt_files(file_paths):
     data = {}
@@ -296,31 +301,29 @@ def monitor_process_memory(executable_path, sample_hz=10, mem_sample_file_path="
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run perf commands with a given executable file")
     parser.add_argument("executable", help="Path to the executable file")
+    parser.add_argument("-p", "--program-args", type=str, default="", 
+                        help="Arguments to pass to the executable program")
     parser.add_argument("-f", "--frequency", type=int, default=10, 
                         help="Sampling frequency for monitor_process_memory (default: 10 Hz)")
     parser.add_argument("-r", "--interval", type=float, default=1.0, 
                         help="Interval for the read command (default: 1.0)")
     args = parser.parse_args()
 
-    #run_perf_commands(args.executable)
-    #run_perf_stat_commands(args.executable)
-    #monitor_process(args.executable, args.interval)
-
-    profile_program(args.executable, args.interval)
-    monitor_process_memory(args.executable, sample_hz=args.frequency)
-
     if check_bcc_library():
-        run_flow_pid_script(args.executable)
+        first_record(args.executable, args.program_args)
+        second_record(args.executable, args.program_args)
     else:
-        print("Warning: Get the net flow needs the BCC library.")
+        run_perf_commands(args.executable)
+        run_perf_stat_commands(args.executable)
+        monitor_process(args.executable, args.interval)
+        monitor_process_memory(args.executable, sample_hz=args.frequency)
 
     if check_nsys_installed():
-        # check the nsys
         run_nsys_profile_and_stats()
     else:
         print("Warning: Get the gpu data needs the nsys tool, you should install cuda.")
 
-    txt_files = ["perf_stat.txt", "perf_script.txt", "get_active_page_data.txt", "net_flow.txt", "nsys_data_output.txt", "mem_sample.txt"]
+    txt_files = ["perf_stat.txt", "get_active_page_data.txt", "net_flow.txt", "nsys_data_output.txt", "mem_sample.txt", "load_data.txt", "func_time.txt"]
     temp_files = []
     sorted_function = func_time()
     for func_name, proportion in sorted_function[:3]:
@@ -334,6 +337,9 @@ if __name__ == "__main__":
 
     txt_files.append("gdb.txt")
     txt_files.append("perf.data")
+    txt_files.append("tmp_start.txt")
+    txt_files.append("perf_script.txt")
+    txt_files.append("execve_start.txt")
     txt_files.extend(temp_files)
     
         # delete the temp files

@@ -15,6 +15,10 @@ bpf_program = """
 #include <linux/tcp.h>
 #include <net/sock.h>
 #include <linux/sched.h>
+#include <linux/blk_types.h>
+#include <linux/blk-mq.h>
+#include <linux/blkdev.h>
+#include <linux/time64.h>
 
 struct exec_event {
     u32 pid;
@@ -25,6 +29,7 @@ struct exit_event {
     u32 pid;
     u64 total_bytes;
     u64 total_io_time_ns;
+    //u64 total_disk_bytes;
 };
 
 struct ipv4_key_t {
@@ -34,6 +39,7 @@ struct ipv4_key_t {
 struct disk_io_event {
     u64 total_io_time_ns;
     u64 last_io_start;
+    //u64 total_disk_bytes;
 };
 
 BPF_PERF_OUTPUT(exec_events);
@@ -101,12 +107,14 @@ TRACEPOINT_PROBE(block, block_rq_issue) {
 
 // 记录 I/O 结束时间并累计耗时
 TRACEPOINT_PROBE(block, block_rq_complete) {
+    //unsigned int bytes = (unsigned int)ctx->args[2];
     u32 pid = bpf_get_current_pid_tgid() >> 32;
     struct disk_io_event *io = io_events.lookup(&pid);
 
     if (io && io->last_io_start > 0) {
         u64 io_end = bpf_ktime_get_ns();
         io->total_io_time_ns += io_end - io->last_io_start;
+        //io->total_disk_bytes += bytes;
         io->last_io_start = 0;
     }
     return 0;
@@ -132,6 +140,7 @@ TRACEPOINT_PROBE(sched, sched_process_exit) {
     }
 
     if (io) {
+        //event.total_disk_bytes = io->total_disk_bytes;
         event.total_io_time_ns = io->total_io_time_ns;
         io_events.delete(&pid);
     }
@@ -156,12 +165,14 @@ class ExitEvent(ctypes.Structure):
         ("pid", ctypes.c_uint32),
         ("total_bytes", ctypes.c_ulonglong),
         ("total_io_time_ns", ctypes.c_ulonglong)
+        #("total_disk_bytes", ctypes.c_ulonglong)
     ]
 
 class IoEvent(ctypes.Structure):
     _fields_ = [
         ("total_io_time_ns", ctypes.c_ulonglong),
         ("last_io_start", ctypes.c_ulonglong)
+        #("total_disk_bytes", ctypes.c_ulonglong)
     ]
 
 # 绑定 perf event 输出
@@ -183,6 +194,7 @@ def handle_exit_event(cpu, data, size):
     pid = event.pid
     total_bytes_kb = int(event.total_bytes / 1024)
     total_io_time_ms = event.total_io_time_ns / 1000000
+    #total_disk_bytes = event.total_disk_bytes
 
     if pid in tracked_pids:
         print(f"Process exited: PID {pid}, Total Network Traffic: {total_bytes_kb} KB, Total IO Time: {total_io_time_ms:.2f} ms")
